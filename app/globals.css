@@ -32,3 +32,10 @@ input {
     @apply h-11 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-white placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60;
   }
 }
+
+@layer utilities {
+  .glass-panel {
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(2, 6, 23, 0.9));
+    box-shadow: 0 30px 80px rgba(2, 6, 23, 0.45);
+  }
+}

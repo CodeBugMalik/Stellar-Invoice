@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { stellar } from '@/lib/stellar-helper';
+import { stellar, type ContractEventRecord, type ContractSubmission } from '@/lib/stellar-helper';
 import {
   FiArrowDownLeft,
   FiArrowUpRight,
+  FiClock,
   FiExternalLink,
   FiRefreshCw,
   FiSearch,
@@ -24,10 +25,15 @@ interface Transaction {
 interface TransactionHistoryProps {
   publicKey: string;
   refreshKey?: number;
+  contractId?: string;
+  submissionHash?: string;
+  onStatusChange?: (status: 'idle' | 'pending' | 'success' | 'failed') => void;
 }
 
-export default function TransactionHistory({ publicKey, refreshKey = 0 }: TransactionHistoryProps) {
+export default function TransactionHistory({ publicKey, refreshKey = 0, contractId, submissionHash, onStatusChange }: TransactionHistoryProps) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [events, setEvents] = useState<ContractEventRecord[]>([]);
+  const [submissions, setSubmissions] = useState<ContractSubmission[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
@@ -35,8 +41,20 @@ export default function TransactionHistory({ publicKey, refreshKey = 0 }: Transa
 
   useEffect(() => {
     loadTransactions();
+    loadContractData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [publicKey, refreshKey]);
+
+  useEffect(() => {
+    if (!submissionHash) return;
+
+    const interval = window.setInterval(() => {
+      loadContractData();
+    }, 15000);
+
+    return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submissionHash, contractId]);
 
   const loadTransactions = async () => {
     try {
@@ -49,6 +67,25 @@ export default function TransactionHistory({ publicKey, refreshKey = 0 }: Transa
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  };
+
+  const loadContractData = async () => {
+    if (!contractId) return;
+
+    try {
+      const [nextEvents, nextStatus] = await Promise.all([
+        stellar.getContractEvents(contractId, 8),
+        submissionHash ? stellar.pollContractStatus(submissionHash) : Promise.resolve(null),
+      ]);
+
+      setEvents(nextEvents);
+      if (nextStatus) {
+        setSubmissions((current) => [nextStatus, ...current].slice(0, 6));
+        onStatusChange?.(nextStatus.status.toLowerCase() as 'pending' | 'success' | 'failed');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Unable to load contract data.');
     }
   };
 
@@ -95,6 +132,56 @@ export default function TransactionHistory({ publicKey, refreshKey = 0 }: Transa
       {error && (
         <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-100">
           {error}
+        </div>
+      )}
+
+      {contractId && (
+        <div className="mb-6 grid gap-4 lg:grid-cols-[1fr_1fr]">
+          <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-cyan-200">
+              <FiClock className="h-4 w-4" />
+              Transaction status
+            </div>
+            <div className="mt-3 space-y-2">
+              {submissions.length === 0 ? (
+                <p className="text-sm text-slate-500">No contract submissions yet.</p>
+              ) : (
+                submissions.map((submission) => (
+                  <div key={submission.hash} className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-medium text-white">{submission.action}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-xs ${submission.status === 'SUCCESS' ? 'bg-emerald-500/20 text-emerald-200' : submission.status === 'FAILED' ? 'bg-red-500/20 text-red-200' : 'bg-amber-500/20 text-amber-200'}`}>
+                        {submission.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 font-mono text-xs text-slate-500">{stellar.formatAddress(submission.hash, 8, 8)}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-cyan-200">
+              <FiClock className="h-4 w-4" />
+              Real-time events
+            </div>
+            <div className="mt-3 space-y-2">
+              {events.length === 0 ? (
+                <p className="text-sm text-slate-500">No contract events captured yet.</p>
+              ) : (
+                events.map((event) => (
+                  <div key={event.id} className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-medium text-white">{event.topic.join(' / ') || 'contract-event'}</span>
+                      <span className="text-xs text-slate-500">Ledger {event.ledger}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-400">{JSON.stringify(event.value)}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       )}
 

@@ -5,7 +5,7 @@ import BalanceDisplay from '@/components/BalanceDisplay';
 import PaymentForm from '@/components/PaymentForm';
 import TransactionHistory from '@/components/TransactionHistory';
 import WalletConnection from '@/components/WalletConnection';
-import { stellar } from '@/lib/stellar-helper';
+import { DEFAULT_CONTRACT_ID, stellar } from '@/lib/stellar-helper';
 import {
   FiActivity,
   FiCheckCircle,
@@ -14,6 +14,7 @@ import {
   FiFileText,
   FiLock,
   FiSend,
+  FiCpu,
 } from 'react-icons/fi';
 
 type TransactionResult = {
@@ -26,6 +27,10 @@ export default function StellarInvoicePage() {
   const [publicKey, setPublicKey] = useState('');
   const [latestResult, setLatestResult] = useState<TransactionResult | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [contractId] = useState(DEFAULT_CONTRACT_ID);
+  const [walletId, setWalletId] = useState('freighter');
+  const [contractSubmissionHash, setContractSubmissionHash] = useState('');
+  const [contractStatus, setContractStatus] = useState<'idle' | 'pending' | 'success' | 'failed'>('idle');
 
   const shortAddress = useMemo(() => {
     return publicKey ? stellar.formatAddress(publicKey, 6, 6) : 'Not connected';
@@ -34,6 +39,8 @@ export default function StellarInvoicePage() {
   const handleDisconnect = () => {
     setPublicKey('');
     setLatestResult(null);
+    setContractSubmissionHash('');
+    setContractStatus('idle');
   };
 
   const handlePaymentSuccess = (hash: string) => {
@@ -42,6 +49,17 @@ export default function StellarInvoicePage() {
       message: 'Invoice payment confirmed on Stellar Testnet.',
       hash,
     });
+    setRefreshKey((value) => value + 1);
+  };
+
+  const handleContractAction = (hash: string) => {
+    setLatestResult({
+      status: 'success',
+      message: 'Contract call submitted to Stellar Testnet.',
+      hash,
+    });
+    setContractSubmissionHash(hash);
+    setContractStatus('pending');
     setRefreshKey((value) => value + 1);
   };
 
@@ -68,7 +86,11 @@ export default function StellarInvoicePage() {
               <span className="h-2 w-2 rounded-full bg-emerald-400" />
               Testnet active
             </div>
-            <WalletConnection onConnect={setPublicKey} onDisconnect={handleDisconnect} />
+            <WalletConnection
+              onConnect={setPublicKey}
+              onDisconnect={handleDisconnect}
+              onWalletChosen={setWalletId}
+            />
           </div>
         </div>
       </div>
@@ -83,23 +105,23 @@ export default function StellarInvoicePage() {
                     Level 1 dashboard
                   </p>
                   <h2 className="max-w-2xl text-3xl font-semibold tracking-normal text-white sm:text-4xl">
-                    Create and pay Stellar invoices with a Freighter wallet.
+                    Multi-wallet Stellar dashboard with Soroban contract support.
                   </h2>
                 </div>
                 <FiCreditCard className="hidden h-10 w-10 text-cyan-300 sm:block" />
               </div>
 
               <p className="max-w-2xl text-base leading-7 text-slate-300">
-                Connect a Stellar Testnet wallet, check your XLM balance, send an
-                invoice payment, and review confirmation details from the same
-                workspace.
+                Connect one of several Stellar wallets, check your XLM balance,
+                call the deployed Soroban contract, and review transaction status
+                plus live event updates from the same workspace.
               </p>
 
               <div className="mt-6 grid gap-3 sm:grid-cols-3">
                 {[
-                  { icon: FiLock, label: 'Freighter wallet', value: 'Connect / disconnect' },
+                  { icon: FiLock, label: 'Wallets', value: 'Freighter / xBull / Albedo' },
                   { icon: FiActivity, label: 'Balance', value: 'Live XLM fetch' },
-                  { icon: FiSend, label: 'Payment', value: 'Signed testnet transfer' },
+                  { icon: FiSend, label: 'Contract', value: 'Soroban read / write' },
                 ].map((item) => (
                   <div key={item.label} className="rounded-lg border border-slate-800 bg-slate-950 p-4">
                     <item.icon className="mb-3 h-5 w-5 text-cyan-300" />
@@ -116,8 +138,8 @@ export default function StellarInvoicePage() {
               <div className="rounded-lg border border-dashed border-slate-700 bg-slate-900/60 p-6">
                 <p className="text-sm font-medium text-white">Wallet required</p>
                 <p className="mt-2 text-sm leading-6 text-slate-400">
-                  Connect Freighter on Stellar Testnet to load your XLM balance
-                  and enable invoice payments.
+                  Connect any supported wallet on Stellar Testnet to load your XLM balance,
+                  enable invoice payments, and interact with the deployed contract.
                 </p>
               </div>
             )}
@@ -166,13 +188,42 @@ export default function StellarInvoicePage() {
               </div>
             )}
 
-            <PaymentForm publicKey={publicKey} onSuccess={handlePaymentSuccess} />
+            <div className="rounded-lg border border-slate-800 bg-slate-900 p-5">
+              <div className="flex items-center gap-3">
+                <FiCpu className="h-5 w-5 text-cyan-300" />
+                <div>
+                  <p className="text-sm font-medium text-white">Deployed contract</p>
+                  <p className="text-xs text-slate-500">Testnet Soroban contract id</p>
+                </div>
+              </div>
+              <div className="mt-3 rounded-md bg-slate-950 px-3 py-2 font-mono text-sm text-cyan-200">
+                {stellar.formatAddress(contractId, 10, 10)}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-400">
+                <span className="rounded-full border border-slate-700 px-2 py-1">Wallet: {walletId}</span>
+                <span className="rounded-full border border-slate-700 px-2 py-1">Status: {contractStatus}</span>
+                <span className="rounded-full border border-slate-700 px-2 py-1">Frontend contract calls enabled</span>
+              </div>
+            </div>
+
+            <PaymentForm
+              publicKey={publicKey}
+              onSuccess={handlePaymentSuccess}
+              onContractAction={handleContractAction}
+              contractId={contractId}
+            />
           </div>
         </div>
 
         {publicKey && (
           <div className="mt-6">
-            <TransactionHistory publicKey={publicKey} refreshKey={refreshKey} />
+            <TransactionHistory
+              publicKey={publicKey}
+              refreshKey={refreshKey}
+              contractId={contractId}
+              submissionHash={contractSubmissionHash}
+              onStatusChange={setContractStatus}
+            />
           </div>
         )}
       </section>

@@ -1,12 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { stellar } from '@/lib/stellar-helper';
-import { FiAlertCircle, FiCheckCircle, FiExternalLink, FiSend } from 'react-icons/fi';
+import { DEFAULT_CONTRACT_ID, stellar } from '@/lib/stellar-helper';
+import { FiAlertCircle, FiCheckCircle, FiExternalLink, FiPlay, FiSend } from 'react-icons/fi';
 
 interface PaymentFormProps {
   publicKey: string;
   onSuccess?: (hash: string) => void;
+  onContractAction?: (hash: string) => void;
+  contractId?: string;
 }
 
 type FormErrors = {
@@ -20,10 +22,14 @@ type AlertState = {
   hash?: string;
 };
 
-export default function PaymentForm({ publicKey, onSuccess }: PaymentFormProps) {
+type ContractMode = 'increment' | 'set_message';
+
+export default function PaymentForm({ publicKey, onSuccess, onContractAction, contractId = DEFAULT_CONTRACT_ID }: PaymentFormProps) {
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
   const [memo, setMemo] = useState('');
+  const [contractMessage, setContractMessage] = useState('Hello Soroban');
+  const [mode, setMode] = useState<ContractMode>('increment');
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const [alert, setAlert] = useState<AlertState | null>(null);
@@ -90,6 +96,34 @@ export default function PaymentForm({ publicKey, onSuccess }: PaymentFormProps) 
       setAlert({
         type: 'error',
         message: normalizePaymentError(err),
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleContractWrite = async () => {
+    try {
+      setLoading(true);
+      setAlert(null);
+
+      const result = await stellar.invokeContractWrite({
+        publicKey,
+        contractId,
+        method: mode,
+        message: contractMessage,
+      });
+
+      setAlert({
+        type: 'success',
+        message: `Contract ${mode === 'increment' ? 'incremented' : 'message updated'} and submitted as pending.`,
+        hash: result.hash,
+      });
+      onContractAction?.(result.hash);
+    } catch (err: any) {
+      setAlert({
+        type: 'error',
+        message: normalizeContractError(err),
       });
     } finally {
       setLoading(false);
@@ -189,6 +223,51 @@ export default function PaymentForm({ publicKey, onSuccess }: PaymentFormProps) 
         </button>
       </form>
 
+      <div className="mt-6 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+        <div className="flex items-center gap-2 text-sm font-semibold text-cyan-100">
+          <FiPlay className="h-4 w-4" />
+          Soroban contract action
+        </div>
+        <p className="mt-2 text-sm text-slate-300">
+          Call the deployed Testnet contract from the frontend, then watch the status panel and live events update.
+        </p>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-2 block text-sm font-medium text-slate-300">Mode</span>
+            <select value={mode} onChange={(event) => setMode(event.target.value as ContractMode)} className="field-input">
+              <option value="increment">Increment counter</option>
+              <option value="set_message">Set message</option>
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-sm font-medium text-slate-300">Message</span>
+            <input
+              value={contractMessage}
+              onChange={(event) => setContractMessage(event.target.value)}
+              placeholder="Hello Soroban"
+              className="field-input"
+              disabled={loading || mode === 'increment'}
+            />
+          </label>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleContractWrite}
+          disabled={!publicKey || loading}
+          className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-400 px-4 text-sm font-semibold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {loading ? (
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-950/30 border-t-slate-950" />
+          ) : (
+            <FiPlay className="h-4 w-4" />
+          )}
+          {loading ? 'Submitting contract call...' : 'Call contract from frontend'}
+        </button>
+      </div>
+
       <p className="mt-4 text-xs leading-5 text-slate-500">
         Transactions are irreversible. Check the recipient address before signing
         in your wallet.
@@ -228,6 +307,24 @@ function normalizePaymentError(error: any) {
 
   if (message.toLowerCase().includes('rejected')) {
     return 'Payment was rejected in the wallet.';
+  }
+
+  return message;
+}
+
+function normalizeContractError(error: any) {
+  const message = String(error?.message || 'Contract call failed. Please try again.');
+
+  if (message.toLowerCase().includes('wallet')) {
+    return 'Contract call failed because the wallet was not available or the request was rejected.';
+  }
+
+  if (message.toLowerCase().includes('balance')) {
+    return 'Contract call failed because the source account does not have enough XLM for fees.';
+  }
+
+  if (message.toLowerCase().includes('not found')) {
+    return 'Contract call failed because the deployed contract address could not be found.';
   }
 
   return message;

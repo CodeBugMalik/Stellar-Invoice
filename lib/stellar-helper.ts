@@ -6,12 +6,47 @@ import {
   allowAllModules,
 } from '@creit.tech/stellar-wallets-kit';
 
+export const DEFAULT_CONTRACT_ID =
+  process.env.NEXT_PUBLIC_STELLAR_CONTRACT_ID || 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+export const DEFAULT_RPC_URL =
+  process.env.NEXT_PUBLIC_STELLAR_RPC_URL || 'https://soroban-rpc.testnet.stellar.org';
+
+export type ContractEventRecord = {
+  id: string;
+  type: string;
+  topic: string[];
+  value: unknown;
+  ledger: number;
+  txHash: string;
+  inSuccessfulContractCall: boolean;
+  createdAt: string;
+};
+
+export type ContractSubmission = {
+  hash: string;
+  status: 'PENDING' | 'SUCCESS' | 'FAILED';
+  contractId: string;
+  action: 'deploy' | 'increment' | 'set_message' | 'read';
+  createdAt: string;
+  returnValue?: string;
+  events?: ContractEventRecord[];
+  error?: string;
+};
+
+export type ContractState = {
+  counter: number;
+  latestWriter: string;
+  lastMessage: string;
+};
+
 export class StellarHelper {
   private server: StellarSdk.Horizon.Server;
+  private rpcServer: StellarSdk.SorobanRpc.Server;
   private networkPassphrase: string;
   private kit: StellarWalletsKit | null = null;
   private network: WalletNetwork;
   private publicKey: string | null = null;
+  private contractId: string;
 
   constructor(network: 'testnet' | 'mainnet' = 'testnet') {
     this.server = new StellarSdk.Horizon.Server(
@@ -21,17 +56,25 @@ export class StellarHelper {
     );
     this.networkPassphrase =
       network === 'testnet' ? StellarSdk.Networks.TESTNET : StellarSdk.Networks.PUBLIC;
+    this.rpcServer = new StellarSdk.SorobanRpc.Server(
+      network === 'testnet' ? DEFAULT_RPC_URL : 'https://soroban-rpc.publicnode.com'
+    );
 
     this.network = network === 'testnet' ? WalletNetwork.TESTNET : WalletNetwork.PUBLIC;
+    this.contractId = DEFAULT_CONTRACT_ID;
   }
 
   isFreighterInstalled(): boolean {
     return true;
   }
 
-  async connectWallet(): Promise<string> {
+  async connectWallet(walletId?: string): Promise<string> {
     try {
       const kit = this.getKit();
+
+      if (walletId) {
+        kit.setWallet(walletId);
+      }
 
       await kit.openModal({
         onWalletSelected: async (option) => {
@@ -160,6 +203,162 @@ export class StellarHelper {
       createdAt: payment.created_at,
       hash: payment.transaction_hash,
     }));
+  }
+
+  getContractId(): string {
+    return this.contractId;
+  }
+
+  setContractId(contractId: string) {
+    this.contractId = contractId;
+  }
+
+  async readContractState(publicKey: string, contractId: string = this.contractId): Promise<ContractState> {
+    try {
+      const sourceAccount = await this.server.loadAccount(publicKey);
+      const contract = new StellarSdk.Contract(contractId);
+      const transaction = new StellarSdk.TransactionBuilder(sourceAccount, {
+        fee: StellarSdk.BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(contract.call('get_state'))
+        .setTimeout(30)
+        .build();
+
+      const simulation = await this.rpcServer.simulateTransaction(transaction);
+
+      if (StellarSdk.SorobanRpc.Api.isSimulationError(simulation)) {
+        throw new Error(simulation.error);
+      }
+
+      const result = simulation.result?.retval ? StellarSdk.scValToNative(simulation.result.retval) : null;
+
+      if (Array.isArray(result)) {
+        return {
+          counter: Number(result[0] || 0),
+          latestWriter: String(result[1] || ''),
+          lastMessage: String(result[2] || ''),
+        };
+      }
+
+      return {
+        counter: 0,
+        latestWriter: '',
+        lastMessage: '',
+      };
+    } catch (error: any) {
+      throw new Error(`Contract read failed: ${error.message || 'Unable to query the contract.'}`);
+    }
+  }
+
+  async invokeContractWrite(params: {
+    publicKey: string;
+    contractId?: string;
+    method: 'increment' | 'set_message';
+    message?: string;
+  }): Promise<ContractSubmission> {
+    const contractId = params.contractId || this.contractId;
+
+    try {
+      const sourceAccount = await this.server.loadAccount(params.publicKey);
+      const contract = new StellarSdk.Contract(contractId);
+      const operationArgs =
+        params.method === 'set_message'
+          ? [StellarSdk.nativeToScVal(params.message || '', { type: 'string' })]
+          : [];
+
+      const transaction = new StellarSdk.TransactionBuilder(sourceAccount, {
+        fee: StellarSdk.BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(contract.call(params.method, ...operationArgs))
+        .setTimeout(30)
+        .build();
+
+      const { signedTxXdr } = await this.getKit().signTransaction(transaction.toXDR(), {
+        networkPassphrase: this.networkPassphrase,
+        address: params.publicKey,
+      });
+
+      const signedTransaction = StellarSdk.TransactionBuilder.fromXDR(
+        signedTxXdr,
+        this.networkPassphrase
+      );
+
+      const sendResponse = await this.rpcServer.sendTransaction(signedTransaction);
+
+      return {
+        hash: sendResponse.hash,
+        status: sendResponse.status === 'PENDING' ? 'PENDING' : 'FAILED',
+        contractId,
+        action: params.method,
+        createdAt: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      throw new Error(`Contract invocation failed: ${error.message || 'Please try again.'}`);
+    }
+  }
+
+  async pollContractStatus(hash: string): Promise<ContractSubmission> {
+    try {
+      const response = await this.rpcServer.getTransaction(hash);
+
+      if (response.status === StellarSdk.SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+        return {
+          hash,
+          status: 'PENDING',
+          contractId: this.contractId,
+          action: 'read',
+          createdAt: new Date().toISOString(),
+        };
+      }
+
+      if (response.status === StellarSdk.SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        return {
+          hash,
+          status: 'FAILED',
+          contractId: this.contractId,
+          action: 'read',
+          createdAt: new Date().toISOString(),
+          error: 'The network rejected the contract transaction.',
+        };
+      }
+
+      return {
+        hash,
+        status: 'SUCCESS',
+        contractId: this.contractId,
+        action: 'read',
+        createdAt: new Date().toISOString(),
+        returnValue: response.returnValue ? String(StellarSdk.scValToNative(response.returnValue)) : undefined,
+      };
+    } catch (error: any) {
+      throw new Error(`Transaction status lookup failed: ${error.message || 'Unable to track status.'}`);
+    }
+  }
+
+  async getContractEvents(contractId: string = this.contractId, limit: number = 8): Promise<ContractEventRecord[]> {
+    try {
+      const latestLedger = await this.rpcServer.getLatestLedger();
+      const response = await this.rpcServer.getEvents({
+        startLedger: Math.max(0, latestLedger.sequence - 20),
+        filters: [{ type: 'contract', contractIds: [contractId] }],
+        limit,
+      });
+
+      return response.events.map((event) => ({
+        id: event.id,
+        type: event.type,
+        topic: event.topic.map((item) => String(StellarSdk.scValToNative(item))),
+        value: StellarSdk.scValToNative(event.value),
+        ledger: event.ledger,
+        txHash: event.txHash,
+        inSuccessfulContractCall: event.inSuccessfulContractCall,
+        createdAt: event.ledgerClosedAt,
+      }));
+    } catch (error: any) {
+      throw new Error(`Event sync failed: ${error.message || 'Unable to load contract events.'}`);
+    }
   }
 
   getExplorerLink(hash: string, type: 'tx' | 'account' = 'tx'): string {

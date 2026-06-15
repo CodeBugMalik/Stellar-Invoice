@@ -7,19 +7,26 @@ import { FiCheck, FiCopy, FiCreditCard, FiLogOut } from 'react-icons/fi';
 interface WalletConnectionProps {
   onConnect: (publicKey: string) => void;
   onDisconnect: () => void;
+  onWalletChosen?: (walletId: string) => void;
 }
 
-export default function WalletConnection({ onConnect, onDisconnect }: WalletConnectionProps) {
+const walletOptions = [
+  { id: 'freighter', label: 'Freighter', note: 'Browser extension' },
+  { id: 'xbull', label: 'xBull', note: 'WalletConnect / extension' },
+  { id: 'albedo', label: 'Albedo', note: 'Link-based wallet' },
+];
+
+export default function WalletConnection({ onConnect, onDisconnect, onWalletChosen }: WalletConnectionProps) {
   const [publicKey, setPublicKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
 
-  const handleConnect = async () => {
+  const handleConnect = async (walletId?: string) => {
     try {
       setLoading(true);
       setError('');
-      const key = await stellar.connectWallet();
+      const key = await stellar.connectWallet(walletId);
       setPublicKey(key);
       onConnect(key);
     } catch (err: any) {
@@ -46,9 +53,25 @@ export default function WalletConnection({ onConnect, onDisconnect }: WalletConn
   if (!publicKey) {
     return (
       <div className="flex flex-col gap-2">
+        <div className="grid gap-2 sm:grid-cols-3">
+          {walletOptions.map((wallet) => (
+            <button
+              key={wallet.id}
+              type="button"
+              onClick={() => {
+                onWalletChosen?.(wallet.id);
+                handleConnect(wallet.id);
+              }}
+              className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-left text-xs text-slate-400 transition hover:border-cyan-400 hover:text-white"
+            >
+              <div className="font-semibold text-slate-200">{wallet.label}</div>
+              <div>{wallet.note}</div>
+            </button>
+          ))}
+        </div>
         <button
           type="button"
-          onClick={handleConnect}
+          onClick={() => handleConnect()}
           disabled={loading}
           className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-cyan-400 px-4 text-sm font-semibold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-70"
         >
