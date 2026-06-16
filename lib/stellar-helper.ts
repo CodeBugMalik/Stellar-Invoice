@@ -7,7 +7,7 @@ import {
 } from '@creit.tech/stellar-wallets-kit';
 
 export const DEFAULT_CONTRACT_ID =
-  process.env.NEXT_PUBLIC_STELLAR_CONTRACT_ID || 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+  process.env.NEXT_PUBLIC_STELLAR_CONTRACT_ID || 'CCJXEAK3DIPQRDN7N3P4V4Q7NCO262WMRRLYMSA5V5OP4RWTSR7NEO5W';
 export const DEFAULT_RPC_URL =
   process.env.NEXT_PUBLIC_STELLAR_RPC_URL || 'https://soroban-rpc.testnet.stellar.org';
 
